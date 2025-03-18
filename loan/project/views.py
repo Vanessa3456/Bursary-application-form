@@ -1,7 +1,7 @@
 from django.shortcuts import render
 
 # Create your views here.
-from django.shortcuts import render, redirect, get_list_or_404
+from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth import login, authenticate, logout
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.forms import AuthenticationForm
@@ -103,6 +103,132 @@ def admin_dashboard(request):
     applications=Rattansi.objects.all().order_by('-created_at')
     
     # filter applications based on status provided
+    status_filter= request.GET.get('status',None)
+    if status_filter and status_filter != 'all':
+        applications=applications.filter(application_status=status_filter)
+        
+    # get counts for each status
+    pending_count=Rattansi.objects.filter(applications_status='pending').count()
+    approved_count=Rattansi.objects.filter(applications_status='approved').count()
+    rejected_count=Rattansi.objects.filter(applications_status='rejected').count()
+    
+    return render(request, 'admin_dashboard.html',{
+        'applications':applications,
+        'pending_count':pending_count,
+        'approved_count':approved_count,
+        'rejected_count':rejected_count,
+        'status_filter':status_filter or 'all',       
+    })
+    
+@login_required
+def apply_for_bursary(request):
+    # check if user  already has a pending application
+    has_pending=Rattansi.objects.filter(
+        student=request.user,
+        application_status='pending'
+    ).exists()
+    
+    if has_pending:
+        messages.warning(request,"You already have a pending application. You cannot submit another one until the current application is process")
+        return redirect('student_dashboard')
+    
+    if request.method == 'POST':
+        form = RattansiBursaryApplicationForm(request.POST, request.FILES)
+        if form.is_valid():
+            application= form.save(commit=False)
+            application.student=request.user
+            application.save()
+            messages.success(request, "Your bursary application has been submitted succefully.")
+            return redirect('student_dashboard')
+        else:
+            form=RattansiBursaryApplicationForm()
+            return render(request, 'apply_for_bursary.html',{'form':form})
+        
+@login_required
+def application_detail(request, application_id):
+    application=get_object_or_404(Rattansi,id=application_id)
+    
+    # ensure only the admin can view the application
+    if application.student != request.user and not(request.user.is_admin or request.user.is_staff):
+        messages.error(request, "You are not authorized to view this application")
+        return redirect('student_dashboard')
+    return redirect(request, 'application_details.html',{'application':application})
+
+@login_required
+@user_passes_test(is_admin)
+def update_application_status(request, application_id):
+    application= get_object_or_404(Rattansi, id=application_id)
+    
+    if request.method == 'POST':
+        new_status=request.POST.get('application_status')
+        amount_awarded= request.POST.get('amount_awarded',None)
+        dean_comments=request.POST.get('dean_comments','')
+        
+        if new_status in [choice[0] for choice in Rattansi.STATUS_CHOICES]:
+            application.application_status=new_status
+            application.school_dean_comments=dean_comments
+            
+            if new_status == 'approved' and amount_awarded:
+                application.amount_awarded=amount_awarded
+            
+                application.save()
+                messages.success(request, f"Application status updated to {new_status}.")
+            else:
+                messages.error(request, "Invalid status provided")
+            
+        return redirect('application_detail',application_id=application_id)
+    
+@login_required
+def download_attachment(request, application_id, file_type):
+    application=get_object_or_404(Rattansi, id=application_id)
+    
+    # ensure only the owner or admin can download attachments
+    if application.student != request.user and not (request.user.is_admin or request.user.is_staff):
+        messages.error(request, "You are not authorized to download this file.")
+        return redirect('student_dashboard')
+    
+    # determine which file to save
+    if file_type == 'fee_statement' and application.fee_statement:
+        file_path= application.fee_statement.path
+    elif file_type == 'death_certificate' and application.death_certificate:
+        file_path=application.death_certificate.path
+    elif file_type == 'health_documents' and application.health_documents:
+        file_path=application.health_documents.path
+    elif file_type == 'other_documents' and application.other_documents:
+        file_path=application.other_documents.path
+    else:
+        messages.error(request, "The requested file does not exist.")
+        return redirect('application_detail')
+    application_id=application_id
+    
+    # check if file exists and serve it
+    if os.path.exists(file_path):
+        with open(file_path, 'rb') as fh:
+            response= HttpResponse(fh.read(), content_type='application/octet-stream')
+            response['Content-Disposition']=f'attachment filename={os.path.basename(file_path)}'
+            return response
+    else:
+        messages.error(request, "File not found.")
+        return redirect('application_detail',application_id=application_id)
+    
+            
+        
+    
+            
+                
+                
+                
+            
+        
+        
+    
+            
+    
+    
+    
+    
+
+    
     
 
     
